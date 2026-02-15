@@ -88,9 +88,26 @@ def collect_images(input_dir: Path, extensions: set[str]) -> list[Path]:
     return sorted(paths)
 
 
+def scale_to_full_range(img: Image.Image) -> Image.Image:
+    """Scale pixel values to the full range 0-255 (min -> 0, max -> 255)."""
+    pixels = list(img.getdata())
+    min_val = min(pixels)
+    max_val = max(pixels)
+    if max_val == min_val:
+        # Constant image: set all to 0 (or leave unchanged; 0 keeps range [0,255])
+        scaled = [0] * len(pixels)
+    else:
+        scale = 255.0 / (max_val - min_val)
+        scaled = [round((p - min_val) * scale) for p in pixels]
+    out_img = Image.new("L", img.size)
+    out_img.putdata(scaled)
+    return out_img
+
+
 def process_image(path: Path, lut: list[int], output_dir: Path, flip_left_right: bool = False) -> None:
-    """Load image, convert to greyscale, apply LUT, optionally flip left-right, save to output_dir (same filename)."""
+    """Load image, convert to greyscale, scale to 0-255, apply LUT, optionally flip left-right, save to output_dir (same filename)."""
     img = Image.open(path).convert("L")
+    img = scale_to_full_range(img)
     out = img.point(lut, mode="L")
     if flip_left_right:
         out = out.transpose(Image.FLIP_LEFT_RIGHT)
