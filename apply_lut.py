@@ -9,6 +9,7 @@ Use --negative to invert the output (negative image) and flip the image left-rig
 """
 
 import argparse
+import colorsys
 import csv
 import sys
 from pathlib import Path
@@ -90,7 +91,7 @@ def collect_images(input_dir: Path, extensions: set[str]) -> list[Path]:
 
 def scale_to_full_range(img: Image.Image) -> Image.Image:
     """Scale pixel values to the full range 0-255 (min -> 0, max -> 255)."""
-    pixels = list(img.getdata())
+    pixels = list(img.get_flattened_data())
     min_val = min(pixels)
     max_val = max(pixels)
     if max_val == min_val:
@@ -104,13 +105,29 @@ def scale_to_full_range(img: Image.Image) -> Image.Image:
     return out_img
 
 
-def process_image(path: Path, lut: list[int], output_dir: Path, flip_left_right: bool = False) -> None:
-    """Load image, convert to greyscale, scale to 0-255, apply LUT, optionally flip left-right, save to output_dir (same filename)."""
+def apply_hsv_tint(img: Image.Image, h: float, s: float, v_scale: float) -> Image.Image:
+    """Convert greyscale image (L) to RGB using fixed H and S; pixel value drives V scaled by v_scale. h,s,v_scale in [0,1]."""
+    pixels = list(img.get_flattened_data())
+    rgb_pixels: list[tuple[int, int, int]] = []
+    for L in pixels:
+        v = (L / 255.0) * v_scale
+        r, g, b = colorsys.hsv_to_rgb(h, s, v)
+        rgb_pixels.append((round(r * 255), round(g * 255), round(b * 255)))
+    out = Image.new("RGB", img.size)
+    out.putdata(rgb_pixels)
+    return out
+
+
+def process_image(path: Path, lut: list[int], output_dir: Path, flip_left_right: bool = False, hsv: tuple[float, float, float] | None = None) -> None:
+    """Load image, convert to greyscale, scale to 0-255, apply LUT, optionally flip left-right, optionally apply HSV tint, save to output_dir (same filename)."""
     img = Image.open(path).convert("L")
     img = scale_to_full_range(img)
     out = img.point(lut, mode="L")
     if flip_left_right:
         out = out.transpose(Image.FLIP_LEFT_RIGHT)
+    if hsv is not None:
+        h, s, v_scale = hsv
+        out = apply_hsv_tint(out, h, s, v_scale)
     out_path = output_dir / path.name
     # Preserve format: JPG/JPEG -> JPEG, PNG -> PNG
     suffix = path.suffix.lower()
@@ -153,6 +170,13 @@ def main() -> None:
         default="jpg,jpeg,png",
         help="Comma-separated file extensions to process (default: jpg,jpeg,png)",
     )
+    parser.add_argument(
+        "--hsv",
+        type=str,
+        default=None,
+        metavar="H,S,V",
+        help="Tint output to HSV color: H 0-360, S 0-100, V 0-100 (V scales luminance)",
+    )
     args = parser.parse_args()
 
     if not args.input_dir.is_dir():
@@ -171,6 +195,27 @@ def main() -> None:
     if args.negative:
         lut = [255 - v for v in lut]
 
+    hsv_tuple: tuple[float, float, float] | None = None
+    if args.hsv is not None:
+        parts = [p.strip() for p in args.hsv.split(",")]
+        if len(parts) != 3:
+            print("Error: --hsv must be H,S,V (e.g. 30,100,100)", file=sys.stderr)
+            sys.exit(1)
+        try:
+            h_deg = float(parts[0])
+            s_pct = float(parts[1])
+            v_pct = float(parts[2])
+        except ValueError as e:
+            print(f"Error: --hsv values must be numbers: {e}", file=sys.stderr)
+            sys.exit(1)
+        if not (0 <= h_deg <= 360):
+            print("Error: --hsv H must be in [0, 360]", file=sys.stderr)
+            sys.exit(1)
+        if not (0 <= s_pct <= 100) or not (0 <= v_pct <= 100):
+            print("Error: --hsv S and V must be in [0, 100]", file=sys.stderr)
+            sys.exit(1)
+        hsv_tuple = (h_deg / 360.0, s_pct / 100.0, v_pct / 100.0)
+
     extensions = {e.strip() for e in args.extensions.split(",") if e.strip()}
     images = collect_images(args.input_dir, extensions)
 
@@ -182,7 +227,7 @@ def main() -> None:
 
     for path in images:
         try:
-            process_image(path, lut, args.output_dir, flip_left_right=args.negative)
+            process_image(path, lut, args.output_dir, flip_left_right=args.negative, hsv=hsv_tuple)
             print(path.name)
         except Exception as e:
             print(f"Error processing {path}: {e}", file=sys.stderr)
