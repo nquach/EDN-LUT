@@ -106,12 +106,13 @@ def scale_to_full_range(img: Image.Image) -> Image.Image:
 
 
 def apply_hsv_tint(img: Image.Image, h: float, s: float, v_scale: float) -> Image.Image:
-    """Convert greyscale image (L) to RGB using fixed H and S; pixel value drives V scaled by v_scale. h,s,v_scale in [0,1]."""
+    """Hue fixed to H; S = (255-L)/255 * user S (black=full sat, white=0), V = L/255 * user V (black=0, white=full). Black stays black, white stays white. h,s,v_scale in [0,1]."""
     pixels = list(img.get_flattened_data())
     rgb_pixels: list[tuple[int, int, int]] = []
     for L in pixels:
-        v = (L / 255.0) * v_scale
-        r, g, b = colorsys.hsv_to_rgb(h, s, v)
+        s_effective = (255 - L) / 255.0 * s
+        v_effective = (L / 255.0) * v_scale
+        r, g, b = colorsys.hsv_to_rgb(h, s_effective, v_effective)
         rgb_pixels.append((round(r * 255), round(g * 255), round(b * 255)))
     out = Image.new("RGB", img.size)
     out.putdata(rgb_pixels)
